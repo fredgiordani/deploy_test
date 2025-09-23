@@ -1,3 +1,119 @@
+#!/usr/bin/env bash
+# /srv/myapp/deploy.sh — déploiement verbeux + rollback
+set -Eeuo pipefail
+
+### --- CONFIG ---
+APP_DIR="/srv/myapp"
+SRC_DIR="/opt/app/hello"         # ← ton code source actuel (on basculera sur git + artefacts plus tard)
+SERVICE="myapp"
+KEEP_RELEASES=5
+NODE="/usr/bin/node"             # chemin fixe de node (systemd-friendly)
+
+### --- LOGS ---
+TS="$(date +%Y%m%d%H%M%S)"
+REL_DIR="$APP_DIR/releases/$TS"
+LOG_DIR="$APP_DIR/deploy-logs"
+LOG_FILE="$LOG_DIR/deploy-$TS.log"
+mkdir -p "$LOG_DIR"
+# Horodatage chaque ligne + double sortie console + fichier
+exec > >(awk '{ print strftime("[%F %T]"), $0 }' | tee -a "$LOG_FILE") 2>&1
+
+### --- HELPERS ---
+step() { echo; echo "=== STEP: $* ==="; }
+fail() { echo "✖ ERROR at line $1 while: $2"; echo "→ Voir $LOG_FILE"; exit 1; }
+SECONDS=0
+_current_cmd="init"
+trap 'fail "$LINENO" "$_current_cmd"' ERR
+
+run() { _current_cmd="$*"; echo "+ $*"; eval "$*"; }
+
+### --- CONTEXTE ---
+step "Contexte & pré-checks"
+run "whoami && hostname && pwd"
+run "$NODE -v || true"
+run "npm -v || true"
+test -f "$SRC_DIR/package.json"; echo "OK: package.json dans $SRC_DIR"
+test -f "$APP_DIR/shared/.env"; echo "OK: .env partagé présent"
+PORT="$(grep -E '^PORT=' "$APP_DIR/shared/.env" | cut -d= -f2 || true)"; : "${PORT:=3001}"
+echo "Port détecté: $PORT"
+
+### --- CRÉER LE RELEASE ---
+step "Création du release $REL_DIR"
+run "mkdir -p '$REL_DIR'"
+run "rsync -a --delete '$SRC_DIR'/ '$REL_DIR'/"   # copie le code courant
+run "du -sh '$REL_DIR' || true"
+
+### --- DEPS & BUILD ---
+step "Installation des dépendances (npm ci / npm i)"
+cd "$REL_DIR"
+if [ -f package-lock.json ]; then
+  run "npm ci --no-audit --no-fund"
+else
+  run "npm install --no-audit --no-fund"
+fi
+step "Build (optionnel)"
+run "npm run build --if-present || true"
+
+### --- LIENS PARTAGÉS ---
+step "Lier l'env partagé"
+run "ln -sfn '$APP_DIR/shared/.env' '$REL_DIR/.env'"
+
+### --- BASCULE ATOMIQUE + RESTART ---
+step "Bascule current -> $REL_DIR (sauvegarde ancien lien pour rollback)"
+OLD_CURRENT="$(readlink -f "$APP_DIR/current" || true)"; echo "Ancien current: ${OLD_CURRENT:-<none>}"
+run "ln -sfn '$REL_DIR' '$APP_DIR/current'"
+
+step "Redémarrage du service $SERVICE"
+run "sudo systemctl restart '$SERVICE'"
+run "sudo systemctl is-active '$SERVICE'"
+
+### --- SANTÉ (retry) ---
+step "Healthcheck (max 20s) sur http://127.0.0.1:$PORT"
+for i in $(seq 1 20); do
+  if curl -sSf "http://127.0.0.1:$PORT/healthz" >/dev/null 2>&1 || \
+     curl -sSf "http://127.0.0.1:$PORT/"       >/dev/null 2>&1; then
+    echo "✔ Healthcheck OK (try $i)"
+    break
+  fi
+  sleep 1
+  [ "$i" -eq 20 ] && {
+    echo "✖ Healthcheck KO après 20s — rollback…"
+    if [ -n "$OLD_CURRENT" ] && [ -d "$OLD_CURRENT" ]; then
+      run "ln -sfn '$OLD_CURRENT' '$APP_DIR/current'"
+      run "sudo systemctl restart '$SERVICE'"
+      echo "Rollback effectué -> $OLD_CURRENT"
+    else
+      echo "Aucun ancien release sûr trouvé — rollback impossible."
+    fi
+    echo "Derniers logs du service :"
+    run "sudo journalctl -u '$SERVICE' -n 80 --no-pager || true"
+    exit 1
+  }
+done
+
+### --- DIAGNOSTIC POST-START ---
+step "Diagnostic rapide"
+run "sudo ss -lptn 'sport = :$PORT' || true"
+run "readlink -f '$APP_DIR/current'"
+run "ls -1 '$APP_DIR/releases' | tail -n 5"
+
+### --- RÉTENTION ---
+step "Rétention: garder $KEEP_RELEASES releases (purge anciens)"
+# garde les $KEEP_RELEASES plus récents
+TO_DELETE=$(ls -1 "$APP_DIR/releases" | sort | head -n -"$KEEP_RELEASES" 2>/dev/null || true)
+if [ -n "$TO_DELETE" ]; then
+  echo "$TO_DELETE" | while read -r d; do
+    run "rm -rf '$APP_DIR/releases/$d'"
+  done
+else
+  echo "Rien à purger."
+fi
+
+### --- FIN ---
+echo
+echo "✅ Déploiement OK -> $REL_DIR"
+echo "📝 Log complet: $LOG_FILE"
+echo "⏱  Durée totale: ${SECONDS}s"
 name: Deploy to OVH
 
 on:
