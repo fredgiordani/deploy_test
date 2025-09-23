@@ -1,0 +1,26 @@
+name: Deploy to OVH
+
+on:
+  workflow_dispatch: {}  # lancement manuel pour l’instant
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add SSH key
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: |
+            ${{ secrets.OVH_DEPLOY_KEY }}
+
+      - name: Trust host
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.OVH_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Run deploy script on VPS
+        env:
+          HOST: ${{ secrets.OVH_HOST }}
+          USER: ${{ secrets.OVH_USER }}
+        run: |
+          ssh -o BatchMode=yes "${USER}@${HOST}" 'bash /srv/myapp/deploy.sh && systemctl is-active myapp && readlink -f /srv/myapp/current && ls -1 /srv/myapp/releases | tail -n 1'
