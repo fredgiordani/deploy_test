@@ -38,7 +38,7 @@ jobs:
           ssh -o BatchMode=yes "${USER}@${HOST}" "mkdir -p '${UPLOAD}'"
           rsync -az --delete \
             --exclude='.git' --exclude='node_modules' \
-            -e "ssh -o BatchMode=yes" ./ "${USER}@${HOST}:'${UPLOAD}/'"
+            -e "ssh -o BatchMode=yes" ./ "${USER}@${HOST}:${UPLOAD}/"
           echo "UPLOAD=${UPLOAD}" >> $GITHUB_ENV
           echo "Uploaded to ${UPLOAD}"
 
