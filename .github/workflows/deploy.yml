@@ -2,7 +2,12 @@ name: Deploy to OVH
 
 on:
   push:
-    branches: [ master ]   # garde comme tu l'as configuré
+    branches: [ master ]
+    paths:
+      - '**/*.js'
+      - 'package.json'
+      - 'package-lock.json'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch: {}
 
 concurrency:
@@ -69,3 +74,17 @@ jobs:
           echo "Healthcheck KO après 20s — derniers logs :"
           ssh -o BatchMode=yes "${USER}@${HOST}" 'journalctl -u myapp -n 80 --no-pager'
           exit 1
+
+      - name: Cleanup old uploads on VPS (keep 10)
+        env:
+          HOST: ${{ secrets.OVH_HOST }}
+          USER: ${{ secrets.OVH_USER }}
+        run: |
+          set -e
+          ssh -o BatchMode=yes "${USER}@${HOST}" '
+            UP=/srv/myapp/uploads
+            [ -d "$UP" ] || exit 0
+            ls -1t "$UP" | tail -n +11 | while read d; do
+              rm -rf "$UP/$d"
+            done
+          '
