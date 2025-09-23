@@ -1,11 +1,12 @@
 name: Deploy to OVH
 
 on:
-  workflow_dispatch: {}  # lancement manuel pour l’instant
+  workflow_dispatch: {}   # lancement manuel (on activera "push" après)
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
       - name: Add SSH key
         uses: webfactory/ssh-agent@v0.9.0
@@ -23,4 +24,27 @@ jobs:
           HOST: ${{ secrets.OVH_HOST }}
           USER: ${{ secrets.OVH_USER }}
         run: |
-          ssh -o BatchMode=yes "${USER}@${HOST}" 'bash /srv/myapp/deploy.sh && systemctl is-active myapp && readlink -f /srv/myapp/current && ls -1 /srv/myapp/releases | tail -n 1'
+          set -e
+          ssh -o BatchMode=yes "${USER}@${HOST}" 'bash /srv/myapp/deploy.sh'
+          # Infos utiles après déploiement
+          ssh -o BatchMode=yes "${USER}@${HOST}" 'systemctl is-active myapp && readlink -f /srv/myapp/current && ls -1 /srv/myapp/releases | tail -n 1'
+
+      - name: Healthcheck (retry up to 20s)
+        env:
+          HOST: ${{ secrets.OVH_HOST }}
+          USER: ${{ secrets.OVH_USER }}
+        run: |
+          set -e
+          # Récupère le port depuis .env (défaut 3001)
+          PORT=$(ssh -o BatchMode=yes "${USER}@${HOST}" "grep -E '^PORT=' /srv/myapp/shared/.env | cut -d= -f2 || true")
+          if [ -z "$PORT" ]; then PORT=3001; fi
+          echo "Checking http://127.0.0.1:${PORT} on VPS..."
+          for i in $(seq 1 20); do
+            if ssh -o BatchMode=yes "${USER}@${HOST}" "curl -sSf http://127.0.0.1:${PORT}/healthz >/dev/null 2>&1 || curl -sSf http://127.0.0.1:${PORT}/ >/dev/null 2>&1"; then
+              echo "Healthcheck OK (try $i)"; exit 0
+            fi
+            sleep 1
+          done
+          echo "Healthcheck KO après 20s — derniers logs :"
+          ssh -o BatchMode=yes "${USER}@${HOST}" 'journalctl -u myapp -n 80 --no-pager'
+          exit 1
