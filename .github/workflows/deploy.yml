@@ -3,11 +3,6 @@ name: Deploy to OVH
 on:
   push:
     branches: [ master ]
-    paths:
-      - '**/*.js'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/deploy.yml'
   workflow_dispatch: {}
 
 concurrency:
