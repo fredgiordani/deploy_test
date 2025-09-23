@@ -1,7 +1,8 @@
 name: Deploy to OVH
 
 on:
-  workflow_dispatch: {}   # lancement manuel (on activera "push" après)
+  push:
+    branches: [ master ]
 
 jobs:
   deploy:
