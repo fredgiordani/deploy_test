@@ -2,13 +2,21 @@ name: Deploy to OVH
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master ]   # garde comme tu l'as configuré
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: true
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
       - name: Add SSH key
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -20,13 +28,27 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -H "${{ secrets.OVH_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Run deploy script on VPS
+      - name: Upload sources to VPS (rsync)
         env:
           HOST: ${{ secrets.OVH_HOST }}
           USER: ${{ secrets.OVH_USER }}
         run: |
           set -e
-          ssh -o BatchMode=yes "${USER}@${HOST}" 'bash /srv/myapp/deploy.sh'
+          UPLOAD="/srv/myapp/uploads/${GITHUB_SHA}"
+          ssh -o BatchMode=yes "${USER}@${HOST}" "mkdir -p '${UPLOAD}'"
+          rsync -az --delete \
+            --exclude='.git' --exclude='node_modules' \
+            -e "ssh -o BatchMode=yes" ./ "${USER}@${HOST}:'${UPLOAD}/'"
+          echo "UPLOAD=${UPLOAD}" >> $GITHUB_ENV
+          echo "Uploaded to ${UPLOAD}"
+
+      - name: Run deploy script on VPS with SRC_DIR
+        env:
+          HOST: ${{ secrets.OVH_HOST }}
+          USER: ${{ secrets.OVH_USER }}
+        run: |
+          set -e
+          ssh -o BatchMode=yes "${USER}@${HOST}" "SRC_DIR='${UPLOAD}' bash /srv/myapp/deploy.sh"
           ssh -o BatchMode=yes "${USER}@${HOST}" 'systemctl is-active myapp && readlink -f /srv/myapp/current && ls -1 /srv/myapp/releases | tail -n 1'
 
       - name: Healthcheck (retry up to 20s)
