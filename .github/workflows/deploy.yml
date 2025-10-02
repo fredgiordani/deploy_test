@@ -3,9 +3,9 @@ name: Deploy to OVH
 on:
   push:
     tags:
-      - "build"
-    branches: [master]
-  workflow_dispatch: {}
+      - "build" # Uniquement le tag EXACT 'build'
+  # Retiré pour éviter les lancements manuels :
+  # workflow_dispatch: {}
 
 concurrency:
   group: deploy-prod
@@ -13,6 +13,8 @@ concurrency:
 
 jobs:
   deploy:
+    # Double verrou au cas où quelqu’un modifierait 'on:' plus tard
+    if: github.ref == 'refs/tags/build'
     runs-on: ubuntu-latest
 
     steps:
