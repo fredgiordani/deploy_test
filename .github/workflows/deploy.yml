@@ -2,7 +2,9 @@ name: Deploy to OVH
 
 on:
   push:
-    branches: [ master ]
+    tags:
+      - "build"
+    branches: [master]
   workflow_dispatch: {}
 
 concurrency:
